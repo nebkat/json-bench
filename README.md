@@ -16,11 +16,14 @@ DOM tasks also bring in native C, C++, and Rust parsers.
 | `yyjson` | C | [ibireme/yyjson](https://github.com/ibireme/yyjson) | load, transform, get |
 | `simdjson` | C++ | [simdjson/simdjson](https://github.com/simdjson/simdjson) | load, get |
 | `glaze` | C++ | [stephenberry/glaze](https://github.com/stephenberry/glaze) | load, transform, get |
+| `serpent` | C++ | [nebkat/cpp-serpent](https://github.com/nebkat/cpp-serpent) | all |
 | `sonic-rs` | Rust | [bytedance/sonic-rs](https://github.com/bytedance/sonic-rs) | load, transform, get |
 
 `serde.zig` has no DOM, so it is left out of the DOM tasks instead of being
 compared on an API it does not have. `simdjson` is read-only, so it has no
-`transform`.
+`transform`. `serpent` names a type's fields by reflection, so it runs the
+typed tasks against the same schemas the Zig libraries use (`cpp/serpent_types.hpp`
+mirrors `zig/shared.zig` field for field); it needs GCC 16, see below.
 
 ## Tasks
 
@@ -32,7 +35,8 @@ compared on an API it does not have. `simdjson` is read-only, so it has no
 | Transform data | `transform` | Parse into a DOM and serialize it back. |
 | Get element | `get` | Read one nested element through the library's own access API. |
 
-The first two need a schema, so they only run for the Zig libraries.
+The first two need a schema, so they only run for the Zig libraries and
+`serpent`.
 
 ## Methodology
 
@@ -44,6 +48,10 @@ The first two need a schema, so they only run for the Zig libraries.
   fresh `padded_string`, and `simd-json` clones the buffer. The timed region
   includes whatever the implementation itself does, copy included — this is a
   real design difference, not a shared cost.
+- **`get` reads from whatever the library holds.** The DOM libraries resolve the
+  element in a tree parsed once before the clock starts. `serpent` has no DOM:
+  a reader is a handle into the text that parses only what a step asks for, so
+  its timed region covers resolving the element from the bytes.
 - **`get` amortizes the clock.** A single access is only tens of nanoseconds, so
   every sample resolves the element 1024 times between the two clock reads. The
   clock overhead is then under 0.1% of the reported `ns/op`. The other tasks are
@@ -54,11 +62,32 @@ The first two need a schema, so they only run for the Zig libraries.
 
 ## Quick start
 
-`mise` pins the Zig version; CMake fetches simdjson and Glaze, and Cargo
-fetches the Rust crates, so the first run needs network access.
+`mise` pins the Zig version; CMake fetches simdjson, Glaze and serpent, and
+Cargo fetches the Rust crates, so the first run needs network access.
 
 ```sh
 python3 bench.py
+```
+
+serpent's reflected path needs GCC 16 with `-std=c++26 -freflection`, so the
+whole C/C++ build is configured with that compiler and every implementation is
+compared under one. `bench.py` passes `gcc-16`/`g++-16`; `CC` and `CXX`
+override them. serpent is also a private repository fetched over SSH — build
+from a local checkout instead with
+
+```sh
+cmake --preset release -DFETCHCONTENT_SOURCE_DIR_SERPENT=/path/to/cpp-serpent
+```
+
+`python3 bench.py --without-serpent` leaves serpent out, and with it the GCC 16
+requirement.
+
+Nothing in the timing harness compares outputs, so serpent's benchmark carries
+its own check — that every typed value, tree and resolved element comes back as
+the corpus says it is, against literals read out with an unrelated parser:
+
+```sh
+./build/serpent_bench --verify
 ```
 
 `bench.py` builds every language, runs each implementation, aggregates the runs
@@ -72,6 +101,7 @@ the report.
 | `--runs N` | Independent process runs per implementation (default: 3). |
 | `--parallel [THREADS]` | Also measure 1, 2, 4, ... processes at once, up to `THREADS`, and chart the scaling. |
 | `--no-build` | Regenerate the reports from `results/json/measurements.json`. |
+| `--without-serpent` | Leave serpent out, and with it the GCC 16 requirement. |
 
 ## Layout
 
@@ -81,7 +111,7 @@ the report.
 | `CMakePresets.json` | The `release` preset (`Unix Makefiles`, `Release`, `build/`) shared by `bench.py` and editors; keeps cached generator/build type from drifting. |
 | `zig/` | jsonz, std.json and serde.zig adapters, sharing the `bench.zig` harness. |
 | `c/` | yyjson benchmark. |
-| `cpp/` | simdjson and Glaze benchmarks. |
+| `cpp/` | simdjson, Glaze and serpent benchmarks, sharing `cpp/bench.hpp`. |
 | `rust/` | sonic-rs benchmark. |
 | `data/json/` | Corpus. |
 | `results/` | Generated reports (gitignored). |
@@ -90,7 +120,7 @@ the report.
 
 The `get` task reads one nested element per dataset with each library's own
 access API: `ptrGet` (RFC 6901) for jsonz, `at_pointer` for simdjson, `yyjson_ptr_get` for yyjson, and native
-object/array accessors for the rest.
+object/array accessors for the rest — for serpent that is `reader::operator[]`, walking the text.
 
 | Dataset | Pointer |
 | --- | --- |

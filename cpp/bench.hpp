@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,6 +25,26 @@ inline constexpr std::string_view datasets[] = {
     "gsoc-2018.json", "lottie.json", "otfcc.json", "poet.json",
     "twitter.json", "twitterescaped.json",
 };
+
+// Every dataset, including the tiny typed-only fixture the DOM tasks skip.
+inline constexpr std::string_view all_datasets[] = {
+    "canada.json", "citm_catalog.json", "fgo.json", "github_events.json",
+    "gsoc-2018.json", "lottie.json", "otfcc.json", "poet.json",
+    "twitter.json", "twitterescaped.json", "small.json",
+};
+
+// The datasets a typed schema is written for, matching zig/shared.zig.
+inline constexpr std::string_view known_datasets[] = {
+    "small.json", "canada.json", "github_events.json",
+    "poet.json", "twitter.json", "twitterescaped.json",
+};
+
+inline bool is_known_dataset(std::string_view name) {
+    for (const auto dataset : known_datasets) {
+        if (dataset == name) return true;
+    }
+    return false;
+}
 
 inline constexpr std::pair<std::string_view, std::string_view> get_paths[] = {
     {"canada.json", "/features/0/geometry/coordinates/0/0"},
@@ -84,13 +105,16 @@ inline void print_result(
     std::string_view task,
     std::size_t size,
     std::size_t repeats,
-    std::uint64_t elapsed_ns
+    std::uint64_t elapsed_ns,
+    std::optional<std::size_t> output_bytes = std::nullopt
 ) {
     const auto milliseconds = static_cast<double>(elapsed_ns) / static_cast<double>(repeats) / 1'000'000.0;
     const auto mib_per_second =
         static_cast<double>(size) * 1'000'000'000.0 / static_cast<double>(elapsed_ns) * static_cast<double>(repeats) / (1024.0 * 1024.0);
     std::cout << "  " << parser << ' ' << task << ": " << std::fixed << std::setprecision(6) << milliseconds
-              << " ms/op, " << std::setprecision(2) << mib_per_second << " MiB/s\n";
+              << " ms/op, " << std::setprecision(2) << mib_per_second << " MiB/s";
+    if (output_bytes) std::cout << " (" << *output_bytes << " bytes)";
+    std::cout << '\n';
 }
 
 inline void print_dataset(std::string_view name, std::size_t size, std::size_t repeats) {

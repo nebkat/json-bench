@@ -3,8 +3,8 @@
 Five user tasks are measured, each run by the JSON implementations that
 support it:
 
-* Encode known data      (known-encode)     Zig only
-* Decode known data      (known-decode)     Zig only
+* Encode known data      (known-encode)     Zig and serpent
+* Decode known data      (known-decode)     Zig and serpent
 * Load arbitrary data    (arbitrary-decode)
 * Transform data         (transform)
 * Get element            (get)
@@ -165,7 +165,7 @@ KNOWN_DATASETS = frozenset(
 ARBITRARY_DATASETS = frozenset(ALL_DATASETS) - {"small.json"}
 FORMAT = "json"
 FORMAT_LABEL = "JSON"
-IMPLEMENTATIONS = ("jsonz", "std.json", "serde", "yyjson", "simdjson", "glaze", "sonic-rs")
+IMPLEMENTATIONS = ("jsonz", "std.json", "serde", "yyjson", "simdjson", "glaze", "serpent", "sonic-rs")
 TASKS = (
     ("Encode known data", "known-encode"),
     ("Decode known data", "known-decode"),
@@ -184,6 +184,7 @@ JSON_TOKENS = {
     "yyjson": ("arbitrary-decode", "transform", "get"),
     "simdjson": ("arbitrary-decode", "get"),
     "glaze": ("arbitrary-decode", "transform", "get"),
+    "serpent": ALL_TOKENS,
     "sonic-rs": ("arbitrary-decode", "transform", "get"),
 }
 RUN_COMMANDS = {
@@ -193,8 +194,14 @@ RUN_COMMANDS = {
     "yyjson": ["./build/yyjson_bench"],
     "simdjson": ["./build/simdjson_bench"],
     "glaze": ["./build/glaze_bench"],
+    "serpent": ["./build/serpent_bench"],
     "sonic-rs": ["./target/release/sonic"],
 }
+# serpent names a type's fields by reflection, which today means GCC 16 with -std=c++26
+# -freflection. The whole C/C++ build uses that compiler so every implementation is compared
+# under one; CC and CXX override it, and --without-serpent drops the requirement entirely.
+DEFAULT_C_COMPILER = "gcc-16"
+DEFAULT_CXX_COMPILER = "g++-16"
 
 
 def implementation_directory(implementation: str) -> str:
@@ -328,12 +335,20 @@ def parse_output(output: str, run: int) -> list[Measurement]:
     return measurements
 
 
-def build_all(zig: str, optimize: str) -> None:
+def build_all(zig: str, optimize: str, with_serpent: bool) -> None:
     """Build every language once, before any measurement."""
     run_warmup([zig, "build", f"-Doptimize={optimize}", "-Dcpu=native"])
     # CMakePresets.json pins generator, build type, and binary dir so an editor
     # session and this script always share one configuration.
-    run_warmup(["cmake", "--preset", "release"])
+    configure = [
+        "cmake",
+        "--preset",
+        "release",
+        f"-DCMAKE_C_COMPILER={os.environ.get('CC', DEFAULT_C_COMPILER)}",
+        f"-DCMAKE_CXX_COMPILER={os.environ.get('CXX', DEFAULT_CXX_COMPILER)}",
+        f"-DJSON_BENCH_SERPENT={'ON' if with_serpent else 'OFF'}",
+    ]
+    run_warmup(configure)
     run_warmup(["cmake", "--build", "--preset", "release"])
     run_warmup(["cargo", "build", "--release", "--bins"])
 
@@ -374,6 +389,7 @@ def run_benchmarks(
     zig: str,
     optimize: str,
     output_dir: Path,
+    with_serpent: bool = True,
 ) -> tuple[list[Measurement], dict[str, list[str]]]:
     """Run every (format, implementation) once per thread count.
 
@@ -387,7 +403,7 @@ def run_benchmarks(
     all_measurements: list[Measurement] = []
     commands = {implementation: list(RUN_COMMANDS[implementation]) for implementation in IMPLEMENTATIONS}
 
-    build_all(zig, optimize)
+    build_all(zig, optimize, with_serpent)
 
     for threads in counts:
         print(f"=== warmup at {threads} thread(s) ===", flush=True)
@@ -983,11 +999,22 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="regenerate HTML, CSV, and Markdown from existing measurements",
     )
+    result.add_argument(
+        "--without-serpent",
+        action="store_true",
+        help=(
+            "leave serpent out, and with it the GCC 16 requirement the "
+            "reflected path puts on the C/C++ build"
+        ),
+    )
     return result
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    global IMPLEMENTATIONS
     args = parser().parse_args(argv)
+    if args.without_serpent:
+        IMPLEMENTATIONS = tuple(name for name in IMPLEMENTATIONS if name != "serpent")
     output_dir = DEFAULT_OUTPUT.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     zig = os.environ.get("ZIG", "zig")
@@ -999,7 +1026,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         metadata: dict[str, object] = {}
     else:
         parallel_limit = None if args.parallel is None else (args.parallel or machine_threads())
-        measurements, commands = run_benchmarks(args.runs, parallel_limit, zig, optimize, output_dir)
+        measurements, commands = run_benchmarks(
+            args.runs, parallel_limit, zig, optimize, output_dir, not args.without_serpent
+        )
         metadata = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "project_root": str(ROOT),
