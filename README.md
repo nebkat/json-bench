@@ -48,10 +48,10 @@ The first two need a schema, so they only run for the Zig libraries and
   fresh `padded_string`, and `simd-json` clones the buffer. The timed region
   includes whatever the implementation itself does, copy included — this is a
   real design difference, not a shared cost.
-- **`get` reads from whatever the library holds.** The DOM libraries resolve the
-  element in a tree parsed once before the clock starts. `serpent` has no DOM:
-  a reader is a handle into the text that parses only what a step asks for, so
-  its timed region covers resolving the element from the bytes.
+- **`get` reads from whatever the library holds.** Every implementation parses
+  the document once before the clock starts and the timed region is the lookup
+  alone. `serpent` has no DOM, so what it holds is a `json::structural_index` —
+  where every value is, recorded in that same one pass.
 - **`get` amortizes the clock.** A single access is only tens of nanoseconds, so
   every sample resolves the element 1024 times between the two clock reads. The
   clock overhead is then under 0.1% of the reported `ns/op`. The other tasks are
@@ -120,7 +120,7 @@ the report.
 
 The `get` task reads one nested element per dataset with each library's own
 access API: `ptrGet` (RFC 6901) for jsonz, `at_pointer` for simdjson, `yyjson_ptr_get` for yyjson, and native
-object/array accessors for the rest — for serpent that is `reader::operator[]`, walking the text.
+object/array accessors for the rest — for serpent that is `indexed_reader::operator[]` over a `json::structural_index`.
 
 | Dataset | Pointer |
 | --- | --- |

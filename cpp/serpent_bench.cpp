@@ -4,6 +4,7 @@
 #include "../c/bench_paths.h"
 
 #include <serpent/json.hpp>
+#include <serpent/json/indexed.hpp>
 #include <serpent/value.hpp>
 
 #include <cmath>
@@ -27,22 +28,19 @@ const bench_path *find_path(std::string_view name) {
 }
 
 /// One step of the precompiled path, taken with serpent's own accessors.
-json::reader step_into(const json::reader &value, const bench_step &step) {
+json::indexed_reader step_into(const json::indexed_reader &value, const bench_step &step) {
     if (step.is_index) return value[step.index];
     return value[std::string_view(step.field)];
 }
 
 /// Walks the precompiled path from a handle on the document.
 ///
-/// serpent has no DOM to walk: a reader is a handle into the text that parses only what a step
-/// asks for, so this resolves the element from the bytes rather than from a prebuilt tree. The
-/// timed region therefore covers strictly more than the tree-walking implementations' does.
-json::reader walk(const json::reader &root, const bench_path &path) {
-    json::reader current = step_into(root, path.steps[0]);
-    for (std::size_t i = 1; i < path.count; ++i) {
-        json::reader next = step_into(current, path.steps[i]);
-        current = std::move(next);
-    }
+/// serpent has no DOM, so what stands in for one is the structural index: where every value is,
+/// recorded in one pass before the clock starts, exactly as the other implementations parse
+/// their tree before theirs. A step is then a hop between entries rather than a scan.
+json::indexed_reader walk(const json::indexed_reader &root, const bench_path &path) {
+    json::indexed_reader current = root;
+    for (std::size_t i = 0; i < path.count; ++i) current = step_into(current, path.steps[i]);
     return current;
 }
 
@@ -120,7 +118,9 @@ void arbitrary_tasks(std::string_view name, const std::string &input, std::size_
 
     const auto *path = find_path(name);
     if (path == nullptr) fail("get path", name);
-    const auto document = json::reader::over(input);
+    const auto index = json::structural_index::over(input);
+    if (!index.ok()) fail("get index", name);
+    const auto document = index.root();
     {
         const auto found = walk(document, *path);
         if (found.type() == serpent::kind::invalid) fail("get", name);
@@ -238,8 +238,10 @@ void verify_known(std::string_view name, const std::string &input) {
 void verify_get(std::string_view name, const std::string &input) {
     const auto *path = find_path(name);
     if (path == nullptr) return;
-    const auto document = json::reader::over(input);
-    const auto found = walk(document, *path);
+    const auto index = json::structural_index::over(input);
+    check(index.ok(), name, "structural index");
+    if (!index.ok()) return;
+    const auto found = walk(index.root(), *path);
 
     if (name == "canada.json") {
         check(near(found[std::size_t { 0 }].as<double>().value_or(0), -65.61361699999998)
