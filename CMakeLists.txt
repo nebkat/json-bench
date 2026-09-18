@@ -36,7 +36,7 @@ if(JSON_BENCH_SERPENT)
     FetchContent_Declare(
         serpent
         GIT_REPOSITORY git@github.com:nebkat/cpp-serpent.git
-        GIT_TAG 0d4eb84ef48a134817c8d13410280ab53a8376aa
+        GIT_TAG 837edfea7fd080a6d5fa9aa9fd840f473b46e6e7
     )
 endif()
 
